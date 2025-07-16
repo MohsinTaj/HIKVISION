@@ -2,6 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
 const request = require('request');
+const axios = require('axios');
+const FormData = require('form-data');
 require('dotenv').config();
 
 const app = express();
@@ -68,6 +70,38 @@ app.get('/snapshot', (req, res) => {
     .on('error', () => res.sendStatus(500))
     .pipe(res);
 });
+
+// Periodically send snapshot to Flask every 10 seconds
+const sendSnapshotToFlask = async () => {
+  const snapshotUrl = `http://${CAMERA_IP}/ISAPI/Streaming/channels/101/picture`;
+
+  try {
+    const snapshotResponse = await axios.get(snapshotUrl, {
+      auth: {
+        username: CAMERA_USER,
+        password: CAMERA_PASS,
+      },
+      responseType: 'arraybuffer',
+    });
+
+    const form = new FormData();
+    form.append('image', snapshotResponse.data, {
+      filename: 'snapshot.jpg',
+      contentType: 'image/jpeg',
+    });
+    console.log("to see: ",form);
+    const flaskResponse = await axios.post('http://127.0.0.1:8080/upload', form, {
+      headers: form.getHeaders(),
+    });
+
+    console.log(`🟢 Uploaded to Flask: ${flaskResponse.data}`);
+  } catch (error) {
+    console.error('🔴 Error sending snapshot:', error.message);
+  }
+};
+
+// Run snapshot upload every 10 seconds
+setInterval(sendSnapshotToFlask, 10000);
 
 // Start server
 const PORT = process.env.PORT || 8000;
