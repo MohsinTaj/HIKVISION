@@ -7,10 +7,16 @@ const bcrypt = require("bcryptjs");
 const path = require("path");
 const multer = require("multer");
 const fs = require("fs");
+const request = require('request');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Camera credentials
+const CAMERA_IP = process.env.CAMERA_IP || "192.168.137.167";
+const CAMERA_USER = process.env.CAMERA_USER || "admin";
+const CAMERA_PASS = process.env.CAMERA_PASS || "Mohsinmusab321@";
 
 // MySQL connection
 const db = mysql.createConnection({
@@ -26,6 +32,23 @@ db.connect((err) => {
     process.exit(1);
   }
   console.log("Connected to MySQL");
+});
+
+
+// ==================== camera sample route to get snapshot ====================
+app.get('/snapshot', (req, res) => {
+  const snapshotUrl = `http://${CAMERA_IP}/ISAPI/Streaming/channels/101/picture`;
+
+  request
+    .get(snapshotUrl)
+    .auth(CAMERA_USER, CAMERA_PASS, false)
+    .on('response', function (response) {
+      // Set headers when response starts
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Content-Type', 'image/jpeg');
+    })
+    .on('error', () => res.sendStatus(500))
+    .pipe(res);
 });
 
 // ==================== REGISTER API ====================
@@ -57,7 +80,7 @@ app.post("/register", (req, res) => {
       }
     );
   });
-});
+}); 
 
 // ==================== LOGIN API ====================
 app.post("/login", (req, res) => {
@@ -115,7 +138,7 @@ const upload = multer({ storage });
 
 // ✅ Add Person API
 app.post("/add-person", upload.array("images", 10), (req, res) => {
-  const { name, institute } = req.body;
+  const { name, institute, role, designation } = req.body;
   const files = req.files;
 
   if (!name || !files || files.length === 0) {
@@ -124,8 +147,25 @@ app.post("/add-person", upload.array("images", 10), (req, res) => {
 
   const fileNames = files.map(file => file.filename).join(",");
 
-  const sql = "INSERT INTO people (name, institute, images) VALUES (?, ?, ?)";
-  db.query(sql, [name, institute || "school", fileNames], (err, result) => {
+  let sql, values;
+
+  if (institute === "school") {
+    if (!role) {
+      return res.status(400).json({ success: false, message: "Role is required for school" });
+    }
+    sql = "INSERT INTO people (name, institute, role, images) VALUES (?, ?, ?, ?)";
+    values = [name, "school", role, fileNames];
+  } else if (institute === "corporate") {
+    if (!designation) {
+      return res.status(400).json({ success: false, message: "Designation is required for corporate" });
+    }
+    sql = "INSERT INTO people (name, institute, designation, images) VALUES (?, ?, ?, ?)";
+    values = [name, "corporate", designation, fileNames];
+  } else {
+    return res.status(400).json({ success: false, message: "Invalid institute type" });
+  }
+
+  db.query(sql, values, (err, result) => {
     if (err) {
       console.error("DB Insert Error:", err);
       return res.status(500).json({ success: false, message: "Database error" });
@@ -134,25 +174,16 @@ app.post("/add-person", upload.array("images", 10), (req, res) => {
   });
 });
 
+
 app.get("/list-persons", (req, res) => {
-  const sql = "SELECT id, name, institute, images FROM people";
-  db.query(sql, (err, results) => {
-    if (err) {
-      console.error("DB Fetch Error:", err);
-      return res.status(500).json({ success: false, message: "Database error" });
-    }
-
-    // Convert images string back to array
-    const persons = results.map(p => ({
-      id: p.id,
-      name: p.name,
-      institute: p.institute,
-      images: p.images ? p.images.split(",") : []
-    }));
-
-    res.json({ success: true, persons });
+  const { mode } = req.query;  // "school" or "corporate"
+  const sql = "SELECT * FROM people WHERE institute = ?";
+  db.query(sql, [mode], (err, results) => {
+    if (err) return res.status(500).json({ message: "DB Error" });
+    res.json({ persons: results });
   });
 });
+
 
 app.delete("/delete-person/:id", (req, res) => {
   const { id } = req.params;
